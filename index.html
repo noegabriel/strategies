@@ -40,17 +40,13 @@
   details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
   #results tr[data-id]{cursor:pointer}
   #results tr[data-id]:hover td{background:#1c2430}
-  #results tr[data-id] td:first-child::after{content:"›";color:var(--muted);margin-left:6px}
-  /* modal */
-  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50;
-    align-items:flex-start;justify-content:center;overflow:auto;padding:40px 16px}
-  .overlay.show{display:flex}
-  .modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-    width:min(820px,100%);padding:20px 22px}
-  .modal .mhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
-  .modal h3{margin:0;font-size:16px}
-  .modal .close{cursor:pointer;color:var(--muted);font-size:22px;line-height:1;border:none;background:none}
-  .mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:14px}
+  #results tr[data-id].open td{background:#1c2430}
+  #results tr[data-id] td:first-child .caret{color:var(--muted);margin-left:6px;display:inline-block;transition:transform .15s}
+  #results tr[data-id].open td:first-child .caret{transform:rotate(90deg)}
+  .detail td{padding:0 !important;border-bottom:1px solid var(--line)}
+  .detailbox{padding:14px 12px 18px;background:#0d1117}
+  .detailbox .sub{color:var(--muted);font-size:11.5px;margin-bottom:6px}
+  .mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:9px;margin-top:10px}
   .metric{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:9px 11px}
   .metric .k{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
   .metric .v{font-size:16px;font-variant-numeric:tabular-nums;margin-top:3px}
@@ -112,17 +108,6 @@
       <div class="muted" id="investedInfo"></div>
       <table id="results"></table>
     </div>
-  </div>
-</div>
-
-<div class="overlay" id="overlay">
-  <div class="modal">
-    <div class="mhead">
-      <h3 id="mTitle"></h3>
-      <button class="close" id="mClose">×</button>
-    </div>
-    <div class="muted" id="mSub"></div>
-    <div id="mBody"></div>
   </div>
 </div>
 
@@ -228,7 +213,7 @@ function windowSlice(u, horizonYears){
 
 // ---------------- rendering ----------------
 const cv=document.getElementById("chart"), ctx=cv.getContext("2d");
-let computed=[]; let globalMinDate, globalMaxDate, yMin, yMax; let plot=null; let hoverId=null;
+let computed=[]; let globalMinDate, globalMaxDate, yMin, yMax; let plot=null; let hoverId=null; let expandedId=null;
 
 function recompute(){
   const cap=+document.getElementById("cap").value||0;
@@ -300,28 +285,37 @@ function startAnim(){ cancelAnimationFrame(animId); animStart=performance.now();
 }
 
 function renderTable(){
-  const rows=computed.map(({s,sim})=>{
-    if(!sim)return {s,final:null,invested:null};
-    return {s,final:sim.value[sim.value.length-1],invested:sim.invested,fees:sim.fees};
+  const rows=computed.map(entry=>{
+    const {s,sim}=entry;
+    if(!sim)return {s,entry,final:null};
+    const m=computeMetrics(entry);
+    return {s,entry,m,final:sim.value[sim.value.length-1],invested:sim.invested,fees:sim.fees};
   }).sort((a,b)=>(b.final||-1)-(a.final||-1));
   const inv=rows.find(r=>r.invested)?.invested;
   document.getElementById("investedInfo").textContent =
     inv? `Total investi (capital + DCA): $${Math.round(inv).toLocaleString('en-US')}` : "";
-  let html=`<tr><th>Stratégie</th><th>Valeur finale</th><th>Gain</th><th>×</th><th>Frais</th></tr>`;
+  const NCOL=7;
+  let html=`<tr><th>Stratégie</th><th>Valeur finale</th><th>Gain</th><th>CAGR</th><th>Vol.</th><th>Sharpe</th><th>Max DD</th></tr>`;
+  const sgn=x=>x>=0?"pos":"neg";
   rows.forEach(r=>{
-    if(r.final===null){ html+=`<tr><td><span class="sw" style="background:${r.s.color}"></span>${r.s.name}</td><td colspan="4" class="muted">pas de données sur la fenêtre</td></tr>`; return;}
-    const profit=r.final-r.invested, mult=r.final/r.invested;
-    const cls=profit>=0?"pos":"neg";
-    html+=`<tr data-id="${r.s.id}"><td><span class="sw" style="background:${r.s.color}"></span>${r.s.name}</td>
+    if(r.final===null){ html+=`<tr><td><span class="sw" style="background:${r.s.color}"></span>${r.s.name}</td><td colspan="${NCOL-1}" class="muted">pas de données sur la fenêtre</td></tr>`; return;}
+    const profit=r.final-r.invested, cls=sgn(profit), open=expandedId===r.s.id;
+    html+=`<tr data-id="${r.s.id}" class="${open?'open':''}">
+      <td><span class="sw" style="background:${r.s.color}"></span>${r.s.name}<span class="caret">›</span></td>
       <td>$${Math.round(r.final).toLocaleString('en-US')}</td>
       <td class="${cls}">${profit>=0?'+':''}$${Math.round(profit).toLocaleString('en-US')}</td>
-      <td class="${cls}">${mult.toFixed(2)}×</td>
-      <td class="muted">$${Math.round(r.fees).toLocaleString('en-US')}</td></tr>`;
+      <td class="${sgn(r.m.cagr)}">${pct(r.m.cagr,1)}</td>
+      <td>${pct(r.m.vol,1)}</td>
+      <td class="${sgn(r.m.sharpe)}">${num(r.m.sharpe)}</td>
+      <td class="neg">${pct(r.m.mdd,1)}</td></tr>`;
+    if(open){
+      html+=`<tr class="detail"><td colspan="${NCOL}">${buildMetricsHTML(r.entry)}</td></tr>`;
+    }
   });
   const tbl=document.getElementById("results");
   tbl.innerHTML=html;
   tbl.querySelectorAll("tr[data-id]").forEach(tr=>
-    tr.addEventListener("click",()=>openMetrics(tr.dataset.id)));
+    tr.addEventListener("click",()=>toggleDetail(tr.dataset.id)));
 }
 
 // ---------------- portfolio metrics ----------------
@@ -386,15 +380,12 @@ function pct(x,d=2){return isNaN(x)?"—":(x>=0?"":"")+ (x*100).toFixed(d)+"%";}
 function num(x,d=2){return isNaN(x)?"—":x.toFixed(d);}
 function usd(x){return "$"+Math.round(x).toLocaleString('en-US');}
 
-function openMetrics(id){
-  const entry=computed.find(c=>c.s.id===id); if(!entry||!entry.sim)return;
+function buildMetricsHTML(entry){
   const m=computeMetrics(entry);
-  document.getElementById("mTitle").innerHTML=`<span class="sw" style="background:${entry.s.color}"></span>${entry.s.name}`;
-  document.getElementById("mSub").textContent=
-    `${entry.dates[0]} → ${entry.dates[entry.dates.length-1]}  ·  ${m.n} jours (${m.years.toFixed(1)} ans)  ·  base 100% NAV (hors DCA) pour les ratios`;
   const cell=(k,v,cls="")=>`<div class="metric"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
   const sgn=x=>x>=0?"pos":"neg";
-  let h=`<div class="mgroup">Rendement</div><div class="mgrid">`;
+  let h=`<div class="detailbox"><div class="sub">${entry.dates[0]} → ${entry.dates[entry.dates.length-1]} · ${m.n} jours (${m.years.toFixed(1)} ans) · ratios calculés sur la NAV base 100% (hors DCA)</div>`;
+  h+=`<div class="mgroup">Rendement</div><div class="mgrid">`;
   h+=cell("Rendement total",pct(m.total),sgn(m.total));
   h+=cell("CAGR (annualisé)",pct(m.cagr),sgn(m.cagr));
   h+=cell("Volatilité ann.",pct(m.vol));
@@ -431,12 +422,11 @@ function openMetrics(id){
   h+=`<div class="mgroup">Rendements annuels (NAV)</div><table class="yeartbl"><tr>`;
   m.years_r.forEach(y=>h+=`<th>${y.key}</th>`); h+=`</tr><tr>`;
   m.years_r.forEach(y=>h+=`<td class="${sgn(y.r)}">${pct(y.r,1)}</td>`); h+=`</tr></table>`;
-  document.getElementById("mBody").innerHTML=h;
-  document.getElementById("overlay").classList.add("show");
+  h+=`</div>`;
+  return h;
 }
-document.getElementById("mClose").addEventListener("click",()=>document.getElementById("overlay").classList.remove("show"));
-document.getElementById("overlay").addEventListener("click",e=>{if(e.target.id==="overlay")document.getElementById("overlay").classList.remove("show");});
-document.addEventListener("keydown",e=>{if(e.key==="Escape")document.getElementById("overlay").classList.remove("show");});
+function toggleDetail(id){ expandedId = (expandedId===id)? null : id; renderTable(); }
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){expandedId=null;renderTable();}});
 
 // ---------------- build controls ----------------
 function buildStratControls(){
@@ -522,7 +512,8 @@ cv.addEventListener("mousemove",ev=>{
 cv.addEventListener("mouseleave",()=>{ tip.style.display="none";
   if(hoverId!==null){hoverId=null;draw(1);} });
 cv.style.cursor="pointer";
-cv.addEventListener("click",()=>{ if(hoverId)openMetrics(hoverId); });
+cv.addEventListener("click",()=>{ if(hoverId){toggleDetail(hoverId);
+  document.getElementById("results").scrollIntoView({behavior:"smooth",block:"nearest"});} });
 
 buildStratControls(); updateStratLabels(); updateGlobalLabels(); recompute();
 </script>
