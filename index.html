@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backtest — 8 stratégies (DCA + capital initial)</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --line:#232a34; --txt:#e6edf3;
+    --muted:#8b949e; --accent:#2f81f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       background:var(--bg);color:var(--txt);font-size:14px}
+  header{padding:16px 20px;border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:18px}
+  header p{margin:4px 0 0;color:var(--muted);font-size:12px}
+  .wrap{display:grid;grid-template-columns:340px 1fr;gap:16px;padding:16px;align-items:start}
+  @media(max-width:1000px){.wrap{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .panel h2{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .field{margin-bottom:14px}
+  .field label{display:block;margin-bottom:5px;font-size:12px;color:var(--muted)}
+  .field .val{float:right;color:var(--accent);font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%}
+  input[type=number]{width:100%;background:#0d1117;border:1px solid var(--line);color:var(--txt);
+       padding:7px 9px;border-radius:6px;font-size:13px}
+  canvas{width:100%;display:block;background:#0b0e13;border-radius:8px}
+  table{width:100%;border-collapse:collapse;margin-top:6px;font-variant-numeric:tabular-nums}
+  th,td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);font-size:12.5px}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:7px;vertical-align:middle}
+  .pos{color:#3fb950}.neg{color:#f85149}
+  .strat{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+  .strat .row{display:flex;gap:8px}
+  .strat .row .field{flex:1}
+  .strat .name{font-size:12.5px;margin-bottom:6px;font-weight:600}
+  .muted{color:var(--muted);font-size:11.5px}
+  details summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Backtest de 8 stratégies — capital initial + investissement mensuel (DCA)</h1>
+  <p>Courbes recalculées en direct depuis les backtests. Rendement passé ≠ rendement futur. Cash hors marché = 0%. Signaux décalés d'1 jour (pas de look-ahead).</p>
+</header>
+
+<div class="wrap">
+  <!-- ============ CONTROLS ============ -->
+  <div>
+    <div class="panel">
+      <h2>Paramètres globaux</h2>
+      <div class="field">
+        <label>Capital initial (jour 1) <span class="val" id="v_cap"></span></label>
+        <input type="number" id="cap" value="10000" min="0" step="1000">
+      </div>
+      <div class="field">
+        <label>Investissement mensuel (DCA) <span class="val" id="v_dca"></span></label>
+        <input type="number" id="dca" value="500" min="0" step="50">
+      </div>
+      <div class="field">
+        <label>Durée / temps attendu <span class="val" id="v_h"></span></label>
+        <input type="range" id="horizon" min="1" max="36" value="15" step="1">
+        <div class="muted" id="windowInfo"></div>
+      </div>
+      <div class="field">
+        <label>Frais de transaction / ordre (%) <span class="val" id="v_fee"></span></label>
+        <input type="number" id="fee" value="0.05" min="0" step="0.01">
+        <div class="muted">Défaut ≈ Interactive Brokers (~0,05% du montant, appliqué à chaque ordre : achat initial, DCA, entrées/sorties).</div>
+      </div>
+      <button id="play" style="width:100%;padding:9px;border-radius:6px;border:1px solid var(--line);
+        background:var(--accent);color:#fff;font-size:13px;cursor:pointer">▶ Rejouer l'animation</button>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Stratégies & paramètres</h2>
+      <div id="stratControls"></div>
+    </div>
+  </div>
+
+  <!-- ============ CHART + RESULTS ============ -->
+  <div>
+    <div class="panel" style="position:relative">
+      <h2>Évolution de la valeur du portefeuille (échelle log)</h2>
+      <canvas id="chart" height="460"></canvas>
+      <div id="tip" style="position:absolute;pointer-events:none;display:none;z-index:5;
+        background:#0d1117;border:1px solid var(--line);border-radius:7px;padding:8px 10px;
+        font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.5);white-space:nowrap"></div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Résultat final ($)</h2>
+      <div class="muted" id="investedInfo"></div>
+      <table id="results"></table>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+// ---------------- strategy definitions ----------------
+const DEFAULTS = {smaTrend:200, rsiPeriod:2, rsiBuy:10, exitSma:5};
+const STRATS = [
+  {id:"sp500_bh",  name:"S&P 500 buy & hold",      u:"sp500", type:"bh",     color:"#58a6ff"},
+  {id:"top1_bh",   name:"Top-1 (plus grande entreprise)", u:"top1", type:"bh", color:"#c9d1d9"},
+  {id:"qld_bh",    name:"QLD (2× Nasdaq) buy & hold", u:"qld", type:"bh",    color:"#d29922"},
+  {id:"tqqq_bh",   name:"TQQQ (3× Nasdaq) buy & hold", u:"tqqq", type:"bh",  color:"#3fb950"},
+  {id:"qld_tr",    name:"QLD — trend following",    u:"qld",  type:"trend",  color:"#e3b341"},
+  {id:"qld_mr",    name:"QLD — mean reversion",     u:"qld",  type:"mr",     color:"#f0883e"},
+  {id:"tqqq_tr",   name:"TQQQ — trend following",   u:"tqqq", type:"trend",  color:"#56d364"},
+  {id:"tqqq_mr",   name:"TQQQ — mean reversion",    u:"tqqq", type:"mr",     color:"#db61a2"},
+];
+// per-strategy editable params (only trend/mr use them)
+const params = {};
+STRATS.forEach(s=>params[s.id]={...DEFAULTS});
+
+// ---------------- signal computation ----------------
+function sma(p,n,i){ if(i<n-1) return NaN; let s=0; for(let k=i-n+1;k<=i;k++)s+=p[k]; return s/n; }
+
+function rsiSeries(p,period){
+  const n=p.length, r=new Array(n).fill(NaN);
+  let au=0, ad=0; const a=1/period;
+  for(let i=1;i<n;i++){
+    const d=p[i]-p[i-1]; const up=d>0?d:0, dn=d<0?-d:0;
+    if(i===1){au=up;ad=dn;} else {au=au+a*(up-au); ad=ad+a*(dn-ad);}
+    const rs=ad===0?1e12:au/ad; r[i]=100-100/(1+rs);
+  }
+  return r;
+}
+
+function positions(prices, type, pr){
+  const n=prices.length, pos=new Array(n).fill(0);
+  if(type==="bh"){ pos.fill(1); return pos; }
+  if(type==="trend"){
+    for(let i=0;i<n;i++){ const m=sma(prices,pr.smaTrend,i); pos[i]=(!isNaN(m)&&prices[i]>m)?1:0; }
+    return pos;
+  }
+  // mean reversion (Connors RSI2): enter RSI<buy, exit close>SMA(exitSma)
+  const r=rsiSeries(prices,pr.rsiPeriod); let inPos=false;
+  for(let i=0;i<n;i++){
+    const ex=sma(prices,pr.exitSma,i);
+    if(!inPos){ if(!isNaN(r[i]) && r[i]<pr.rsiBuy) inPos=true; }
+    else { if(!isNaN(ex) && prices[i]>ex) inPos=false; }
+    pos[i]=inPos?1:0;
+  }
+  return pos;
+}
+
+// ---------------- DCA simulation ----------------
+// returns {dates:[], value:[], invested:number}
+function simulate(dates, prices, pos, capital, monthly, fee){
+  const out={dates:[],value:[]}; let V=capital, invested=capital, fees=0;
+  V-=fee*capital*pos[0]; fees+=fee*capital*pos[0];   // initial buy cost
+  for(let i=0;i<prices.length;i++){
+    if(i>0){
+      const ret=prices[i]/prices[i-1]-1;
+      const usePos=pos[i-1];              // lagged signal, no look-ahead
+      V=V*(1+usePos*ret);
+      if(i>=2){                            // rebalance cost on exposure change
+        const dpos=Math.abs(pos[i-1]-pos[i-2]);
+        if(dpos>0){ const c=fee*dpos*V; V-=c; fees+=c; }
+      }
+      if(dates[i].slice(0,7)!==dates[i-1].slice(0,7)){ // new month -> DCA
+        V+=monthly; invested+=monthly;
+        const c=fee*monthly*usePos; V-=c; fees+=c;      // cost on invested part
+      }
+    }
+    out.dates.push(dates[i]); out.value.push(V);
+  }
+  out.invested=invested; out.fees=fees;
+  return out;
+}
+
+// slice underlying to the horizon window (last H years available)
+function windowSlice(u, horizonYears){
+  const d=DATA[u].dates, p=DATA[u].prices;
+  const last=new Date(d[d.length-1]);
+  const cut=new Date(last); cut.setFullYear(cut.getFullYear()-horizonYears);
+  const cutStr=cut.toISOString().slice(0,10);
+  let start=0; while(start<d.length && d[start]<cutStr) start++;
+  return {dates:d.slice(start), prices:p.slice(start)};
+}
+
+// ---------------- rendering ----------------
+const cv=document.getElementById("chart"), ctx=cv.getContext("2d");
+let computed=[]; let globalMinDate, globalMaxDate, yMin, yMax; let plot=null; let hoverId=null;
+
+function recompute(){
+  const cap=+document.getElementById("cap").value||0;
+  const dca=+document.getElementById("dca").value||0;
+  const H=+document.getElementById("horizon").value;
+  const fee=(+document.getElementById("fee").value||0)/100;
+  computed=[];
+  let dmin=null,dmax=null,vmin=Infinity,vmax=-Infinity;
+  STRATS.forEach(s=>{
+    const w=windowSlice(s.u,H);
+    if(w.dates.length<2){ computed.push({s,sim:null}); return; }
+    const norm=w.prices.map(x=>x/w.prices[0]);      // renormalize window start=1
+    const pos=positions(norm,s.type,params[s.id]);
+    const sim=simulate(w.dates,norm,pos,cap,dca,fee);
+    computed.push({s,sim});
+    if(dmin===null||w.dates[0]<dmin)dmin=w.dates[0];
+    if(dmax===null||w.dates[w.dates.length-1]>dmax)dmax=w.dates[w.dates.length-1];
+    for(const v of sim.value){ if(v>0){ if(v<vmin)vmin=v; if(v>vmax)vmax=v; } }
+  });
+  globalMinDate=dmin; globalMaxDate=dmax; yMin=Math.max(vmin,1); yMax=vmax;
+  document.getElementById("windowInfo").textContent =
+    dmin? `Fenêtre: ${dmin} → ${dmax}` : "";
+  renderTable();
+  startAnim();
+}
+
+const toX=d=> new Date(d).getTime();
+function draw(progress){
+  const W=cv.width=cv.clientWidth*devicePixelRatio, Hh=cv.height*devicePixelRatio;
+  cv.style.height=cv.height+"px";
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,W,Hh);
+  const padL=64,padR=14,padT=14,padB=28;
+  const x0=toX(globalMinDate), x1=toX(globalMaxDate);
+  const ly0=Math.log10(yMin), ly1=Math.log10(yMax);
+  const px=t=>padL+(toX(t)-x0)/(x1-x0)*(W-padL-padR);
+  const py=v=>padT+(ly1-Math.log10(v))/(ly1-ly0)*(Hh-padT-padB);
+  plot={px,py,padL,padR,padT,padB,W,H:Hh,x0,x1};
+  // grid (log decades)
+  ctx.strokeStyle="#232a34"; ctx.fillStyle="#8b949e"; ctx.lineWidth=1;
+  ctx.font=(11*devicePixelRatio)+"px sans-serif"; ctx.textBaseline="middle";
+  for(let e=Math.floor(ly0);e<=Math.ceil(ly1);e++){
+    const v=Math.pow(10,e); if(v<yMin||v>yMax)continue; const y=py(v);
+    ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(W-padR,y);ctx.stroke();
+    ctx.fillText("$"+v.toLocaleString('en-US'),6,y);
+  }
+  // year ticks
+  ctx.textBaseline="top"; const yA=new Date(globalMinDate).getFullYear(), yB=new Date(globalMaxDate).getFullYear();
+  const step=Math.ceil((yB-yA)/8)||1;
+  for(let yr=yA;yr<=yB;yr+=step){ const x=px(yr+"-01-01"); if(x<padL)continue;
+    ctx.fillText(yr,x-10,Hh-padB+6); }
+  // curves
+  computed.forEach(({s,sim})=>{
+    if(!sim)return; const n=sim.value.length; const upto=Math.max(2,Math.floor(n*progress));
+    const hot=hoverId===s.id, dim=hoverId&&!hot;
+    ctx.strokeStyle=s.color; ctx.globalAlpha=dim?0.22:1;
+    ctx.lineWidth=(hot?3:1.6)*devicePixelRatio; ctx.beginPath();
+    for(let i=0;i<upto;i++){ const X=px(sim.dates[i]),Y=py(Math.max(sim.value[i],yMin));
+      i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);} ctx.stroke();
+  });
+  ctx.globalAlpha=1;
+}
+
+let animId=null,animStart=0;
+function startAnim(){ cancelAnimationFrame(animId); animStart=performance.now();
+  const dur=650;
+  function tick(now){ let t=Math.min(1,(now-animStart)/dur);
+    draw(t); if(t<1)animId=requestAnimationFrame(tick);} animId=requestAnimationFrame(tick);
+}
+
+function renderTable(){
+  const rows=computed.map(({s,sim})=>{
+    if(!sim)return {s,final:null,invested:null};
+    return {s,final:sim.value[sim.value.length-1],invested:sim.invested,fees:sim.fees};
+  }).sort((a,b)=>(b.final||-1)-(a.final||-1));
+  const inv=rows.find(r=>r.invested)?.invested;
+  document.getElementById("investedInfo").textContent =
+    inv? `Total investi (capital + DCA): $${Math.round(inv).toLocaleString('en-US')}` : "";
+  let html=`<tr><th>Stratégie</th><th>Valeur finale</th><th>Gain</th><th>×</th><th>Frais</th></tr>`;
+  rows.forEach(r=>{
+    if(r.final===null){ html+=`<tr><td><span class="sw" style="background:${r.s.color}"></span>${r.s.name}</td><td colspan="4" class="muted">pas de données sur la fenêtre</td></tr>`; return;}
+    const profit=r.final-r.invested, mult=r.final/r.invested;
+    const cls=profit>=0?"pos":"neg";
+    html+=`<tr><td><span class="sw" style="background:${r.s.color}"></span>${r.s.name}</td>
+      <td>$${Math.round(r.final).toLocaleString('en-US')}</td>
+      <td class="${cls}">${profit>=0?'+':''}$${Math.round(profit).toLocaleString('en-US')}</td>
+      <td class="${cls}">${mult.toFixed(2)}×</td>
+      <td class="muted">$${Math.round(r.fees).toLocaleString('en-US')}</td></tr>`;
+  });
+  document.getElementById("results").innerHTML=html;
+}
+
+// ---------------- build controls ----------------
+function buildStratControls(){
+  const box=document.getElementById("stratControls");
+  STRATS.forEach(s=>{
+    if(s.type==="bh"){
+      box.insertAdjacentHTML("beforeend",
+        `<div class="strat"><div class="name"><span class="sw" style="background:${s.color}"></span>${s.name}</div>
+         <div class="muted">Aucun paramètre (achat & conservation)</div></div>`);
+      return;
+    }
+    let fields="";
+    if(s.type==="trend"){
+      fields=`<div class="field"><label>SMA (jours) <span class="val" id="lab_${s.id}_smaTrend"></span></label>
+        <input type="range" data-s="${s.id}" data-p="smaTrend" min="20" max="300" step="5" value="${params[s.id].smaTrend}"></div>`;
+    } else {
+      fields=`<div class="row">
+        <div class="field"><label>RSI période <span class="val" id="lab_${s.id}_rsiPeriod"></span></label>
+          <input type="range" data-s="${s.id}" data-p="rsiPeriod" min="2" max="14" step="1" value="${params[s.id].rsiPeriod}"></div>
+        <div class="field"><label>Seuil achat <span class="val" id="lab_${s.id}_rsiBuy"></span></label>
+          <input type="range" data-s="${s.id}" data-p="rsiBuy" min="5" max="40" step="1" value="${params[s.id].rsiBuy}"></div>
+        </div>
+        <div class="field"><label>Sortie SMA (jours) <span class="val" id="lab_${s.id}_exitSma"></span></label>
+          <input type="range" data-s="${s.id}" data-p="exitSma" min="2" max="20" step="1" value="${params[s.id].exitSma}"></div>`;
+    }
+    box.insertAdjacentHTML("beforeend",
+      `<div class="strat"><div class="name"><span class="sw" style="background:${s.color}"></span>${s.name}</div>${fields}</div>`);
+  });
+  box.querySelectorAll("input[type=range]").forEach(inp=>{
+    inp.addEventListener("input",e=>{
+      params[e.target.dataset.s][e.target.dataset.p]=+e.target.value;
+      updateStratLabels(); recompute();
+    });
+  });
+}
+function updateStratLabels(){
+  STRATS.forEach(s=>["smaTrend","rsiPeriod","rsiBuy","exitSma"].forEach(p=>{
+    const el=document.getElementById(`lab_${s.id}_${p}`); if(el)el.textContent=params[s.id][p];
+  }));
+}
+
+// ---------------- wiring ----------------
+function fmt$(x){return "$"+(+x).toLocaleString('en-US');}
+function updateGlobalLabels(){
+  document.getElementById("v_cap").textContent=fmt$(document.getElementById("cap").value);
+  document.getElementById("v_dca").textContent=fmt$(document.getElementById("dca").value)+"/mois";
+  document.getElementById("v_h").textContent=document.getElementById("horizon").value+" ans";
+  document.getElementById("v_fee").textContent=(+document.getElementById("fee").value)+"%";
+}
+["cap","dca","horizon","fee"].forEach(id=>
+  document.getElementById(id).addEventListener("input",()=>{updateGlobalLabels();recompute();}));
+document.getElementById("play").addEventListener("click",startAnim);
+window.addEventListener("resize",()=>draw(1));
+
+// ---------------- hover tooltip / legend ----------------
+const tip=document.getElementById("tip");
+cv.addEventListener("mousemove",ev=>{
+  if(!plot)return;
+  const rect=cv.getBoundingClientRect();
+  const mx=(ev.clientX-rect.left)*devicePixelRatio, my=(ev.clientY-rect.top)*devicePixelRatio;
+  // nearest curve at this x
+  let best=null,bestDist=Infinity;
+  computed.forEach(({s,sim})=>{
+    if(!sim)return;
+    // find index whose date-x is closest to mx
+    let lo=0,hi=sim.dates.length-1;
+    while(lo<hi){const m=(lo+hi)>>1; (plot.px(sim.dates[m])<mx)?lo=m+1:hi=m;}
+    const i=lo;
+    const X=plot.px(sim.dates[i]), Y=plot.py(Math.max(sim.value[i],yMin));
+    const d=Math.hypot(X-mx,Y-my);
+    if(d<bestDist){bestDist=d;best={s,i,X,Y,val:sim.value[i],date:sim.dates[i]};}
+  });
+  if(!best||bestDist>40*devicePixelRatio||mx<plot.padL){ tip.style.display="none";
+    if(hoverId!==null){hoverId=null;draw(1);} return; }
+  if(hoverId!==best.s.id){ hoverId=best.s.id; draw(1); }
+  tip.style.display="block";
+  tip.innerHTML=`<span class="sw" style="background:${best.s.color}"></span><b>${best.s.name}</b><br>`+
+    `<span class="muted">${best.date}</span> — $${Math.round(best.val).toLocaleString('en-US')}`;
+  const tx=best.X/devicePixelRatio+14, ty=best.Y/devicePixelRatio-10;
+  tip.style.left=Math.min(tx,cv.clientWidth-tip.offsetWidth-8)+"px";
+  tip.style.top=Math.max(ty,0)+"px";
+});
+cv.addEventListener("mouseleave",()=>{ tip.style.display="none";
+  if(hoverId!==null){hoverId=null;draw(1);} });
+
+buildStratControls(); updateStratLabels(); updateGlobalLabels(); recompute();
+</script>
+</body>
+</html>
