@@ -1,6 +1,6 @@
 # S&P 500 / Nasdaq leveraged strategies — interactive backtest
 
-Live page: **https://USERNAME.github.io/REPO/**
+Live page: **https://noegabriel.github.io/strategies/**
 
 Interactive backtest of 8 equity strategies with editable parameters, initial
 capital, monthly DCA, investment horizon and Interactive-Brokers-style fees.
