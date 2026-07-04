@@ -143,19 +143,22 @@ function rsiSeries(p,period){
   return r;
 }
 
-function positions(prices, type, pr){
+// `sig` = series the SIGNAL is computed on (underlying index for QLD/TQQQ,
+// same as `prices` otherwise). Position is then applied to `prices` returns.
+function positions(prices, type, pr, sig){
+  const s=sig||prices;
   const n=prices.length, pos=new Array(n).fill(0);
   if(type==="bh"){ pos.fill(1); return pos; }
   if(type==="trend"){
-    for(let i=0;i<n;i++){ const m=sma(prices,pr.smaTrend,i); pos[i]=(!isNaN(m)&&prices[i]>m)?1:0; }
+    for(let i=0;i<n;i++){ const m=sma(s,pr.smaTrend,i); pos[i]=(!isNaN(m)&&s[i]>m)?1:0; }
     return pos;
   }
   // mean reversion (Connors RSI2): enter RSI<buy, exit close>SMA(exitSma)
-  const r=rsiSeries(prices,pr.rsiPeriod); let inPos=false;
+  const r=rsiSeries(s,pr.rsiPeriod); let inPos=false;
   for(let i=0;i<n;i++){
-    const ex=sma(prices,pr.exitSma,i);
+    const ex=sma(s,pr.exitSma,i);
     if(!inPos){ if(!isNaN(r[i]) && r[i]<pr.rsiBuy) inPos=true; }
-    else { if(!isNaN(ex) && prices[i]>ex) inPos=false; }
+    else { if(!isNaN(ex) && s[i]>ex) inPos=false; }
     pos[i]=inPos?1:0;
   }
   return pos;
@@ -203,12 +206,13 @@ function computeNav(prices, pos, fee){
 
 // slice underlying to the horizon window (last H years available)
 function windowSlice(u, horizonYears){
-  const d=DATA[u].dates, p=DATA[u].prices;
+  const d=DATA[u].dates, p=DATA[u].prices, sg=DATA[u].signal;
   const last=new Date(d[d.length-1]);
   const cut=new Date(last); cut.setFullYear(cut.getFullYear()-horizonYears);
   const cutStr=cut.toISOString().slice(0,10);
   let start=0; while(start<d.length && d[start]<cutStr) start++;
-  return {dates:d.slice(start), prices:p.slice(start)};
+  return {dates:d.slice(start), prices:p.slice(start),
+          signal: sg? sg.slice(start): null};
 }
 
 // ---------------- rendering ----------------
@@ -226,7 +230,9 @@ function recompute(){
     const w=windowSlice(s.u,H);
     if(w.dates.length<2){ computed.push({s,sim:null}); return; }
     const norm=w.prices.map(x=>x/w.prices[0]);      // renormalize window start=1
-    const pos=positions(norm,s.type,params[s.id]);
+    // signal series (underlying index for QLD/TQQQ), renormalized on the window
+    const sig=w.signal? w.signal.map(x=>x/w.signal[0]): null;
+    const pos=positions(norm,s.type,params[s.id],sig);
     const sim=simulate(w.dates,norm,pos,cap,dca,fee);
     const {nav,ret}=computeNav(norm,pos,fee);
     computed.push({s,sim,nav,ret,pos,dates:w.dates});
