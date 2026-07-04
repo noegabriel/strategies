@@ -19,9 +19,11 @@ ETFs), never on the leveraged ETF price, and strictly **without look-ahead**.
 - `qld_trend_research.ipynb` — search for the final QLD trend-following rule
   (SMA sweep, hysteresis band, dual-MA, slope filter, out-of-sample split, fee
   sensitivity). Retained rule: **SMA(200) + 1% hysteresis band** on `^NDX`.
-- `tqqq_bottom_model.ipynb` — a **causal, out-of-sample calibrated** logistic
-  model that outputs a *probability of being at a crash bottom* (features from
-  SMA, VIX, rolling std and their expanding historical percentiles), used to
-  **accumulate TQQQ in conviction-scaled tranches**.
+- `tqqq_bottom_model.ipynb` — two **causal, out-of-sample calibrated** gradient-
+  boosting models: *P(bottom)* and *P(top)* (features from SMA, VIX, rolling std
+  and their expanding historical percentiles; 70/30 chronological split). They
+  are fused into a single **continuous position-sizing signal** (0 = top → fully
+  out, 0.9 = crash bottom → fully in, 0.1 steps, smoothed) that drives an
+  enter-at-bottom / exit-at-top backtest on TQQQ.
 - `strategies.ipynb` — earlier exploration (trend following + SMA/VIX signal).
 - `data_cache/` — cached price series so notebooks run offline / in Jupyter.
