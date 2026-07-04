@@ -23,7 +23,9 @@ ETFs), never on the leveraged ETF price, and strictly **without look-ahead**.
   boosting models: *P(bottom)* and *P(top)* (features from SMA, VIX, rolling std
   and their expanding historical percentiles; 70/30 chronological split). They
   are fused into a single **continuous position-sizing signal** (0 = top → fully
-  out, 0.9 = crash bottom → fully in, 0.1 steps, smoothed) that drives an
-  enter-at-bottom / exit-at-top backtest on TQQQ.
+  out, 0.9 = crash bottom → fully in, 0.1 steps, smoothed) driven by a state
+  machine: **accumulate at the bottom, hold the whole recovery until the top,
+  exit on trend break / strong top**. Out-of-sample on TQQQ: ~19% CAGR, ~-38%
+  maxDD vs -82% buy & hold.
 - `strategies.ipynb` — earlier exploration (trend following + SMA/VIX signal).
 - `data_cache/` — cached price series so notebooks run offline / in Jupyter.
